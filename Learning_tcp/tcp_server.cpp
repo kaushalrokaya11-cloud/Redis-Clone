@@ -1,25 +1,27 @@
-#include<stdio.h>
-#include<sys/socket.h>
+#include <stdio.h>
+#include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
 #include <assert.h>
 #include <string.h>
+#include <errno.h>
 
-ssize_t request_handler(int * fd);
+
+int32_t request_handler(int * fd);
+const size_t k_max_size = 2048;// size_t is 64 bit and holds unsigned integer 
 
 void msg (const char * msg){// const needed for string literals
     fprintf(stderr,"%s\n",msg);//stderr is a I/O stream which is recognized by the process,by convention, with fd as 2. 
 }
 
-const size_t k_max_size = 2048;// size_t is 64 bit and holds unsigned integer 
 
-static ssize_t read_full(int fd,char * buffer, size_t n){ //static function means this function cannot be used in any other files except where it is defined 
+static int32_t read_full(int fd,char * buffer, size_t n){ //static functions cannot be used in any other files except where they are defined 
     while(n>0){
 
         ssize_t rd = read (fd,buffer,n);
         if(rd<=0){
 
-            return rd;
+            return -1;
         }
         assert((size_t)rd <= n);
         n -= (size_t)rd;
@@ -29,12 +31,12 @@ static ssize_t read_full(int fd,char * buffer, size_t n){ //static function mean
     return 0;
 }
 
-static ssize_t write_full (int fd, char * buffer, size_t n){
+static int32_t write_full (int fd, char * buffer, size_t n){
     while(n>0){
         
         ssize_t wd = write(fd, buffer, n);
         if(wd<=0){
-            return wd;
+            return -1;
         }
         assert((size_t)wd<= n);
         n -= (size_t)wd;
@@ -97,7 +99,7 @@ int main(){
         }
         while(true){
             
-            ssize_t err = request_handler(&newfd);
+            int32_t err = request_handler(&newfd);
             if(err){
                 break;
             }
@@ -108,13 +110,14 @@ int main(){
     return 0;
     
 }
-ssize_t request_handler(int * fd){
+int32_t request_handler(int * fd){
     int newfd = *fd;
     char read_buffer[k_max_size + 4];
-    ssize_t err = read_full(newfd,read_buffer,4);
 
+    errno = 0;
+    int32_t err = read_full(newfd,read_buffer,4);
     if(err){
-        msg(err==0?"EOF":"read() error");
+        msg(errno==0?"EOF":"read() error");
         return -1;
     }
     uint32_t len= 0;
@@ -124,10 +127,11 @@ ssize_t request_handler(int * fd){
         msg("too long");
         return -1;
     }
+    errno = 0;
     err = read_full(newfd,&read_buffer[4],len); 
 
     if(err){
-        msg(err==0?"EOF":"read() error");
+        msg(errno==0?"EOF":"read() error");
         return -1;
     }
 
