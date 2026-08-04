@@ -2,8 +2,47 @@
 #include<sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <assert.h>
+#include <string.h>
 
-void work(int * fd);
+ssize_t request_handler(int * fd);
+
+void msg (const char * msg){// const needed for string literals
+    fprintf(stderr,"%s\n",msg);//stderr is a I/O stream which is recognized by the process,by convention, with fd as 2. 
+}
+
+const size_t k_max_size = 2048;// size_t is 64 bit and holds unsigned integer 
+
+static ssize_t read_full(int fd,char * buffer, size_t n){ //static function means this function cannot be used in any other files except where it is defined 
+    while(n>0){
+
+        ssize_t rd = read (fd,buffer,n);
+        if(rd<=0){
+
+            return rd;
+        }
+        assert((size_t)rd <= n);
+        n -= (size_t)rd;
+        buffer+= rd;
+
+    }
+    return 0;
+}
+
+static ssize_t write_full (int fd, char * buffer, size_t n){
+    while(n>0){
+        
+        ssize_t wd = write(fd, buffer, n);
+        if(wd<=0){
+            return wd;
+        }
+        assert((size_t)wd<= n);
+        n -= (size_t)wd;
+        buffer += wd;
+    }
+    return 0;
+}
+
 
 int main(){
     int fd = socket(AF_INET,SOCK_STREAM,0);
@@ -19,7 +58,7 @@ int main(){
 
     int val = 1;
     int status = setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&val,sizeof(val)); 
-    /*SOL_SOCKET used for generic socket layer(independent to protocals).
+    /*SOL_SOCKET used for generic socket layer.
     SO_REUSEADDR is used to ignore the cooldown due to TIME_WAIT and bind the new server anyway(prevents error: port.address alreay in use)
     val is the bool value to switch on/off SO_REUSEADDR*/ 
     if(status<0){
@@ -40,7 +79,7 @@ int main(){
         return -1;
     }
 
-    rv = listen(fd,SOMAXCONN); //2nd argument is teh size of accept/pending connection queue
+    rv = listen(fd,SOMAXCONN); //2nd argument is the size of accept/pending connection queue
     if(rv<0){
         perror("listen()");
         return -1;
@@ -56,23 +95,51 @@ int main(){
         if(newfd<0){
             continue;
         }
-        work(&newfd);
+        while(true){
+            
+            ssize_t err = request_handler(&newfd);
+            if(err){
+                break;
+            }
+        
+        }
         close(newfd);
     }
-
+    return 0;
     
 }
-void work(int * fd){
+ssize_t request_handler(int * fd){
     int newfd = *fd;
-    char read_buffer[64]= {};
-    ssize_t n = read(newfd,read_buffer,sizeof(read_buffer)-1);
-    if(n<0){
-        perror("Work: read error");
-        return ;
-    }
-    printf("Client send: %s\n",read_buffer);
-    char write_buffer[]="Hello from server!";
+    char read_buffer[k_max_size + 4];
+    ssize_t err = read_full(newfd,read_buffer,4);
 
-    write(newfd,write_buffer,sizeof(write_buffer)-1);
+    if(err){
+        msg(err==0?"EOF":"read() error");
+        return -1;
+    }
+    uint32_t len= 0;
+    memcpy(&len,read_buffer,4);
+
+    if(len>k_max_size){
+        msg("too long");
+        return -1;
+    }
+    err = read_full(newfd,&read_buffer[4],len); 
+
+    if(err){
+        msg(err==0?"EOF":"read() error");
+        return -1;
+    }
+
+    printf("Client send: %.*s\n",len,&read_buffer[4]);
+
+    char reply[] = "Hello from server";
+    len = (int32_t)strlen(reply);
+    char write_buffer[4 + len];
+    memcpy(&write_buffer[0],&len,4);
+    memcpy(&write_buffer[4],reply,len);
+
+    return write_full(newfd,write_buffer,len+4);
+
 
 }
