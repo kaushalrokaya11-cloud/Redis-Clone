@@ -5,44 +5,140 @@
 #include <assert.h>
 #include <string.h>
 #include <errno.h>
+#include<vector>
+#include<poll.h> 
+#include<stdlib.h> 
+#include<fcntl.h> 
+#include<iostream>
 
+using namespace std;
 
-int32_t request_handler(int * fd);
+struct Conn{
+    int fd = -1;
+    bool want_write = false;
+    bool want_read = false;
+    bool want_close = false;
+
+    vector<uint8_t> incoming;
+    vector<uint8_t> outgoing;
+};
+
 const size_t k_max_size = 2048;// size_t is 64 bit and holds unsigned integer 
 
 void msg (const char * msg){// const needed for string literals
     fprintf(stderr,"%s\n",msg);//stderr is a I/O stream which is recognized by the process,by convention, with fd as 2. 
 }
-
-
-static int32_t read_full(int fd,char * buffer, size_t n){ //static functions cannot be used in any other files except where they are defined 
-    while(n>0){
-
-        ssize_t rd = read (fd,buffer,n);
-        if(rd<=0){
-
-            return -1;
-        }
-        assert((size_t)rd <= n);
-        n -= (size_t)rd;
-        buffer+= rd;
-
-    }
-    return 0;
+static void die(const char *msg) {
+    fprintf(stderr, "[%d] %s\n", errno, msg);
+    abort();
+}
+static void fd_set_nb(int fd) {
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
 }
 
-static int32_t write_full (int fd, char * buffer, size_t n){
-    while(n>0){
-        
-        ssize_t wd = write(fd, buffer, n);
-        if(wd<=0){
-            return -1;
-        }
-        assert((size_t)wd<= n);
-        n -= (size_t)wd;
-        buffer += wd;
+static void buf_append(vector<uint8_t> &buf, uint8_t * data, size_t len){
+    buf.insert(buf.end(),data, data+len);
+}
+static void buf_consume(vector<uint8_t> &buf, size_t n  ){
+    buf.erase(buf.begin(), buf.begin()+n);
+}
+static bool try_one_request(Conn * conn){
+    if(conn->incoming.size()<4){
+        return false;//not enough bytes to even read
+                    // the length of the message
     }
-    return 0;
+    uint32_t len = 0;
+    memcpy(&len,conn->incoming.data(),4);
+
+    if(len>k_max_size){
+        conn->want_close= true;// msg too large
+        return false;
+    }
+    if(conn->incoming.size()< 4 + len){
+        return false;// one complete request not arrived
+    }
+   
+
+    //Processing the request:
+    uint8_t request[64 * 1024]; 
+    memcpy(request, &conn->incoming[4],len );
+    cout<<"The incoming request is"<<endl;
+    for(int i = 0 ; i < len; i ++ ){
+        cout<< (char)request[i];
+    }
+
+    //generating response 
+
+    //this is an simple echo server
+    //-following message framing-
+    buf_append(conn->outgoing,(uint8_t*) &len,4);
+    buf_append(conn->outgoing, request, len);
+
+    buf_consume(conn->incoming, 4+len);//removing parsed message from
+                                        //incoming buffer
+
+    return true;//success
+
+}
+
+static Conn* handle_accept(int fd){
+ 
+
+    //Acceptence logic 
+        struct sockaddr_in client_addr = {};
+        socklen_t addrlen = sizeof(client_addr);
+        int newfd = accept(fd,(struct sockaddr *)&client_addr, &addrlen);
+
+        if(newfd<0){return nullptr;}
+
+        fd_set_nb(newfd);
+
+        struct Conn* conn = new Conn();
+        conn->fd = newfd;
+        conn->want_read = true;
+        return conn;
+
+}
+
+static void handle_read(Conn* conn){
+    uint8_t buf[64 * 1024];
+    ssize_t rv = read (conn->fd,buf,64*1024);
+
+    if(rv<=0){
+        conn->want_close= true;
+        return;
+    }
+    buf_append(conn->incoming, buf,(size_t) rv);
+
+    try_one_request(conn);
+
+    if(conn->outgoing.size()>0){//response is ready
+        conn->want_read= false;
+        conn->want_write = true;
+
+    }
+
+}
+
+static void handle_write(Conn*conn){
+    assert(conn->outgoing.size()>0);
+    //indicates some bug if handle_write() is called
+    //but outgoing buffer is empty 
+
+    ssize_t rv = write(conn->fd, conn->outgoing.data(),conn->outgoing.size());
+    if(rv<0){
+        conn->want_close= true;
+        return;
+
+    }
+    buf_consume(conn->outgoing, (size_t)rv);
+
+     if(conn->outgoing.size()==0){//response is sent
+        conn->want_read= true;
+        conn->want_write = false;
+
+    }
+     
 }
 
 
@@ -74,7 +170,7 @@ int main(){
     addr.sin_port = htons(1234);
     addr.sin_addr.s_addr = htonl(0);
 
-    int rv = bind(fd,(const struct sockaddr*)&addr,sizeof(addr));
+    int rv = bind(fd,(const struct sockaddr*)&addr,sizeof(addr));//copies the data from struct sockaddr_in addr to socket object
 
     if(rv){
         perror("bind");
@@ -89,61 +185,72 @@ int main(){
     else{
         printf("Server is running\n");
     }
-    while(true){
-        struct sockaddr_in client_addr = {};
-        socklen_t addrlen = sizeof(client_addr);
-        int newfd = accept(fd,(struct sockaddr *)&client_addr, &addrlen);
+    vector<struct Conn* > fd2conn;
+    vector<struct pollfd > poll_args;
 
-        if(newfd<0){
-            continue;
-        }
-        while(true){
-            
-            int32_t err = request_handler(&newfd);
-            if(err){
-                break;
-            }
+    while(true){
         
+        poll_args.clear();
+        struct pollfd pfd = {fd,POLLIN,0};
+        poll_args.push_back(pfd);
+
+        for(Conn *conn:fd2conn){
+            if(!conn){
+                continue;
+            }
+            pfd = { conn->fd, POLLERR, 0};
+            if(conn->want_read){
+                pfd.events|= POLLIN;
+            }
+            if(conn->want_write){
+                pfd.events|=POLLOUT;
+            }
+            poll_args.push_back(pfd);
         }
-        close(newfd);
+        int p = poll(poll_args.data(),poll_args.size(),-1);
+        if(p<0 && errno == EINTR){
+            continue;
+
+        }
+        if(p<0){
+            die("poll");
+        }
+
+        if(poll_args[0].revents){
+            if(Conn * conn = handle_accept(fd)){
+                if(conn->fd>=fd2conn.size()){
+                    fd2conn.resize(conn->fd+1);
+                }
+                fd2conn[conn->fd]= conn;
+            }
+        }
+        for(int i = 1;i<poll_args.size();i++){
+
+            uint32_t ready = poll_args[i].revents;
+            Conn * conn = fd2conn[poll_args[i].fd];
+            if(ready & POLLIN){
+
+                handle_read(conn);
+            }
+            if(ready & POLLOUT){
+                handle_write(conn);
+
+            }
+            //termination logic
+
+            if(ready & POLLERR || conn->want_close){
+                close(conn->fd);
+                fd2conn[conn->fd]= nullptr;
+                delete conn;
+            }
+
+        }
+
+
+        
+
+        
     }
     return 0;
     
-}
-int32_t request_handler(int * fd){
-    int newfd = *fd;
-    char read_buffer[k_max_size + 4];
-
-    errno = 0;
-    int32_t err = read_full(newfd,read_buffer,4);
-    if(err){
-        msg(errno==0?"EOF":"read() error");
-        return -1;
-    }
-    uint32_t len= 0;
-    memcpy(&len,read_buffer,4);
-
-    if(len>k_max_size){
-        msg("too long");
-        return -1;
-    }
-    errno = 0;
-    err = read_full(newfd,&read_buffer[4],len); 
-
-    if(err){
-        msg(errno==0?"EOF":"read() error");
-        return -1;
-    }
-
-    printf("Client send: %.*s\n",len,&read_buffer[4]);
-
-    char reply[] = "Hello from server";
-    len = (int32_t)strlen(reply);
-    char write_buffer[4 + len];
-    memcpy(&write_buffer[0],&len,4);
-    memcpy(&write_buffer[4],reply,len);
-
-    return write_full(newfd,write_buffer,len+4);
-
-
 }

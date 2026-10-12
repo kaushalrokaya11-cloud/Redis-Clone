@@ -5,6 +5,9 @@
 #include <assert.h>
 #include <string.h>
 #include <errno.h>
+#include <stdlib.h>
+
+
 
 const size_t k_max_size = 2048;
 
@@ -12,6 +15,11 @@ void msg (const char * msg){
     fprintf(stderr,"%s\n",msg);
 }
 
+static void die(const char *msg) {
+    int err = errno;
+    fprintf(stderr, "[%d] %s\n", err, msg);
+    abort();
+}
 
 static int32_t read_full(int fd,char * buffer, size_t n){ 
     while(n>0){
