@@ -110,7 +110,7 @@ static void handle_read(Conn* conn){
     }
     buf_append(conn->incoming, buf,(size_t) rv);
 
-    try_one_request(conn);
+    while(try_one_request(conn)){};
 
     if(conn->outgoing.size()>0){//response is ready
         conn->want_read= false;
