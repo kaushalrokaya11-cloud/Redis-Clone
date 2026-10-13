@@ -62,10 +62,11 @@ static bool try_one_request(Conn * conn){
     //Processing the request:
     uint8_t request[64 * 1024]; 
     memcpy(request, &conn->incoming[4],len );
-    cout<<"The incoming request is"<<endl;
-    for(int i = 0 ; i < len; i ++ ){
+    cout<<"The incoming request is: ";
+    for(int i = 0 ; i < (int)len; i ++ ){
         cout<< (char)request[i];
     }
+    cout<<endl;
 
     //generating response 
 
@@ -218,13 +219,13 @@ int main(){
 
         if(poll_args[0].revents){
             if(Conn * conn = handle_accept(fd)){
-                if(conn->fd>=fd2conn.size()){
+                if(conn->fd>=(int)fd2conn.size()){
                     fd2conn.resize(conn->fd+1);
                 }
                 fd2conn[conn->fd]= conn;
             }
         }
-        for(int i = 1;i<poll_args.size();i++){
+        for(int i = 1;i<(int)poll_args.size();i++){
 
             uint32_t ready = poll_args[i].revents;
             Conn * conn = fd2conn[poll_args[i].fd];

@@ -102,7 +102,7 @@ static int32_t read_res(int fd){
     }
 
 
-    printf("Server responded: %.*s\n",len,&read_buffer[4]);
+    printf("\nServer responded: %.*s\n",(int)len,&read_buffer[4]);
     return 0;
 }
 
