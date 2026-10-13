@@ -6,10 +6,15 @@
 #include <string.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <vector>
+#include <string>
+
+using namespace std;
 
 
 
-const size_t k_max_size = 2048;
+
+const size_t k_max_size = 32<<20;
 
 void msg (const char * msg){
     fprintf(stderr,"%s\n",msg);
@@ -21,7 +26,7 @@ static void die(const char *msg) {
     abort();
 }
 
-static int32_t read_full(int fd,char * buffer, size_t n){ 
+static int32_t read_full(int fd,uint8_t * buffer, size_t n){ 
     while(n>0){
 
         ssize_t rd = read (fd,buffer,n);
@@ -37,7 +42,7 @@ static int32_t read_full(int fd,char * buffer, size_t n){
     return 0;
 }
 
-static int32_t write_full (int fd, char * buffer, size_t n){
+static int32_t write_full (int fd, uint8_t * buffer, size_t n){
     while(n>0){
         
         ssize_t wd = write(fd, buffer, n);
@@ -50,36 +55,38 @@ static int32_t write_full (int fd, char * buffer, size_t n){
     }
     return 0;
 }
-static int32_t query(int * fd, const char * text){
+static int32_t send_req(int  fd,string &text){
     //writing the query
-    uint32_t len = (uint32_t)strlen(text);
+    uint32_t len = (uint32_t)text.length();
     if(len>k_max_size){
         msg("text is too long");
         return -1;
     }
-    char write_buffer[4 + k_max_size];
+    vector<uint8_t> write_buffer(4 + len);
 
-    memcpy(write_buffer,&len,4);
+    memcpy(write_buffer.data(),&len,4);
+    memcpy(&write_buffer[4],text.data(),len);
 
-
-    memcpy(&write_buffer[4],text,len);
-    ssize_t err = write_full(*fd,write_buffer,4+len);
+    ssize_t err = write_full(fd,write_buffer.data(),4+len);
     if(err){
 
         return -1;
     }
+    return 0;
+}
+static int32_t read_res(int fd){
 
-    //reading the response from teh server
-    char read_buffer[4+ k_max_size];
+    //reading the response from the server
+    vector<uint8_t> read_buffer(4);
     errno =0;
 
-    err = read_full(*fd,read_buffer,4);
+   int err = read_full(fd,read_buffer.data(),4);
 
     if(err){
         msg(errno==0?"EOF":"read() error");
         return -1;
     }
-
+    u_int32_t len;
     memcpy(&len,&read_buffer[0],4);
     if(len>k_max_size){
         msg("reply from server is too long");
@@ -87,7 +94,8 @@ static int32_t query(int * fd, const char * text){
     }
 
     errno=0;
-    err = read_full(*fd,&read_buffer[4],len);
+    read_buffer.resize(4+len);
+    err = read_full(fd,&read_buffer[4],len);
     if(err){
         msg(errno==0?"EOF":"read() error");
         return -1;
@@ -115,15 +123,27 @@ int main(){
         return -1;
     }
 
-    int32_t err = query(&fd,"hello! From Kaushal");
-    if(err){
-        goto DONE;
-    }
-    err = query(&fd,"hello! From Mohit");
-    if(err){
-        goto DONE;
-    }
+    vector<string> req_list  = {
+        "request1", "request2", "request3", string(k_max_size,'h'),
+        "request4"
+    };
+    //sending req
+    for (auto &str: req_list){
 
+        int32_t err = send_req(fd,str);
+        if(err){
+            goto DONE;
+        }
+    }
+    //reading response
+    for(int i = 0;i< req_list.size();i++){
+
+       int err = read_res(fd);
+        if(err){
+            goto DONE;
+        }
+    }
+        
     DONE:
     close(fd);
     return 0;
