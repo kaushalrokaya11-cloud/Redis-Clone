@@ -42,6 +42,8 @@ static void buf_append(vector<uint8_t> &buf, uint8_t * data, size_t len){
 static void buf_consume(vector<uint8_t> &buf, size_t n  ){
     buf.erase(buf.begin(), buf.begin()+n);
 }
+
+
 static bool try_one_request(Conn * conn){
     if(conn->incoming.size()<4){
         return false;//not enough bytes to even read
@@ -100,33 +102,15 @@ static Conn* handle_accept(int fd){
         return conn;
 
 }
-
-static void handle_read(Conn* conn){
-    uint8_t buf[64 * 1024];
-    ssize_t rv = read (conn->fd,buf,64*1024);
-
-    if(rv<=0){
-        conn->want_close= true;
-        return;
-    }
-    buf_append(conn->incoming, buf,(size_t) rv);
-
-    while(try_one_request(conn)){};
-
-    if(conn->outgoing.size()>0){//response is ready
-        conn->want_read= false;
-        conn->want_write = true;
-
-    }
-
-}
-
 static void handle_write(Conn*conn){
     assert(conn->outgoing.size()>0);
     //indicates some bug if handle_write() is called
     //but outgoing buffer is empty 
 
     ssize_t rv = write(conn->fd, conn->outgoing.data(),conn->outgoing.size());
+    if(rv < 0 && errno == EAGAIN){//if true means client is not ready to read
+        return;
+    }
     if(rv<0){
         conn->want_close= true;
         return;
@@ -141,6 +125,29 @@ static void handle_write(Conn*conn){
     }
      
 }
+
+static void handle_read(Conn* conn){
+    uint8_t buf[64 * 1024];
+    ssize_t rv = read (conn->fd,buf,64*1024);
+
+    if(rv<=0){
+        conn->want_close= true;
+        return;
+    }
+    buf_append(conn->incoming, buf,(size_t) rv);
+
+    while(try_one_request(conn)){};
+
+
+    if(conn->outgoing.size()>0){//response is ready
+        conn->want_read= false;
+        conn->want_write = true;
+
+    }
+    handle_write(conn);
+
+}
+
 
 
 int main(){
