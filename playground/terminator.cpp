@@ -6,7 +6,9 @@ using namespace std;
 
 int main(){
   
-    vector<int> vec;
-   cout<<vec.size();
+    vector<int> vec(10);
+   int * p = vec.data();
+   *p = 30;
+   cout<<&vec[10]-&vec[1];
     
 }
